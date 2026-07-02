@@ -1,0 +1,16 @@
+-- Add free_trial to valid_status constraint
+-- ALTER TABLE public.user_subscriptions 
+-- DROP CONSTRAINT valid_status,
+-- ADD CONSTRAINT valid_status 
+-- CHECK (
+--   status = ANY (
+--     ARRAY[
+--       'active'::text,
+--       'cancelled'::text,
+--       'expired'::text,
+--       'paused'::text,
+--       'grace_period'::text,
+--       'free_trial'::text
+--     ]
+--   )
+-- );
