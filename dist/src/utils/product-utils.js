@@ -1,26 +1,11 @@
-// Exact product ID mappings (add your actual product IDs here)
+// Exact product ID mappings (the app's real App Store product IDs)
 const PRODUCT_MAP = {
     // Weekly subscription
     embrylyproweekly: {
         planKey: "weekly",
         type: "subscription",
     },
-    // Weekly intro offer
-    embrylyproweeklyintro: {
-        planKey: "weekly",
-        type: "subscription",
-    },
-    // Monthly subscription
-    embrylypromonthly: {
-        planKey: "monthly",
-        type: "subscription",
-    },
-    // Yearly subscription
-    embrylyproyearly: {
-        planKey: "yearly",
-        type: "subscription",
-    },
-    // Yearly free trial
+    // Yearly subscription with free trial
     embrylyproyearlytrial: {
         planKey: "yearly",
         type: "subscription",
@@ -32,7 +17,6 @@ const PRODUCT_MAP = {
  */
 const SUBSCRIPTION_PATTERNS = [
     { pattern: /\bweekly\b/i, planKey: "weekly" },
-    { pattern: /\bmonthly\b/i, planKey: "monthly" },
     { pattern: /\byearly\b/i, planKey: "yearly" },
     { pattern: /\bannual\b/i, planKey: "yearly" },
 ];
