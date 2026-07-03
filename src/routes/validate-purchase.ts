@@ -229,11 +229,10 @@ async function processTransaction(txInfo: any, userId: string, res: any) {
     // Use the userId from request (should match appAccountToken if set)
     const actualUserId = userId;
 
-    // ✅ ADD THIS: Check transaction state
+    // Check transaction state - only proceed for actual purchases
     if (
       txInfo.transactionReason &&
-      (txInfo.transactionReason !== "PURCHASE" ||
-        txInfo.transactionReason !== "PURCHASED")
+      txInfo.transactionReason !== "PURCHASE"
     ) {
       console.log("⏭️ Skipping non-purchased transaction:", {
         transactionId: txInfo.transactionId,
