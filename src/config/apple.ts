@@ -5,17 +5,42 @@ import {
 import fs from "fs";
 
 const bundleId = process.env.APPLE_BUNDLE_ID!;
-console.log(
-  "🔍 APPLE_ENVIRONMENT raw value:",
-  JSON.stringify(process.env.APPLE_ENVIRONMENT),
-);
-const environment =
-  process.env.APPLE_ENVIRONMENT?.trim().toLowerCase() === "production"
-    ? Environment.PRODUCTION
-    : Environment.SANDBOX;
-console.log("🔍 Resolved environment:", environment);
 
-let verifier: SignedDataVerifier | null = null;
+/**
+ * Apple's guidance: validate against Production first, then fall back to
+ * Sandbox. App Review and TestFlight purchase in the Sandbox, live customers
+ * in Production, and both reach this same server. APPLE_ENVIRONMENT only
+ * decides which environment is tried first.
+ */
+const ENVIRONMENTS: Environment[] =
+  process.env.APPLE_ENVIRONMENT?.trim().toLowerCase() === "sandbox"
+    ? [Environment.SANDBOX, Environment.PRODUCTION]
+    : [Environment.PRODUCTION, Environment.SANDBOX];
+
+/** The environment tried first. */
+const environment = ENVIRONMENTS[0];
+
+// App Apple ID, required by the Production verifier.
+const appAppleId = Number(process.env.APPLE_ID || 6776775876);
+
+/** Runs `fn` for each environment in order; returns the first success. */
+async function tryEnvironments<T>(
+  label: string,
+  fn: (env: Environment) => Promise<T>,
+): Promise<T> {
+  let lastError: unknown;
+  for (const env of ENVIRONMENTS) {
+    try {
+      return await fn(env);
+    } catch (error) {
+      lastError = error;
+      console.log(`↪️ ${label} failed in ${env}, trying the next environment`);
+    }
+  }
+  throw lastError;
+}
+
+let verifiers: Map<Environment, SignedDataVerifier> | null = null;
 
 try {
   // Try multiple certificate paths for different environments
@@ -24,33 +49,26 @@ try {
     "/var/task/certs/AppleRootCA-G3.cer", // Vercel serverless
     "/tmp/certs/AppleRootCA-G3.cer", // Alternative Vercel path
   ];
-
-  console.log("🔍 Checking certificate paths:", certPaths);
-  let certPath: string | null = null;
-  for (const path of certPaths) {
-    console.log(`🔍 Checking path: ${path} - exists: ${fs.existsSync(path)}`);
-    if (fs.existsSync(path)) {
-      certPath = path;
-      break;
-    }
-  }
+  const certPath = certPaths.find((path) => fs.existsSync(path)) ?? null;
 
   if (certPath) {
     const appleRootCAs = [fs.readFileSync(certPath)];
     const enableOnlineChecks = true;
-    // App Apple ID is required for Production, optional for Sandbox
-    const appAppleId = process.env.APPLE_ID
-      ? Number(process.env.APPLE_ID)
-      : undefined;
-
-    verifier = new SignedDataVerifier(
-      appleRootCAs,
-      enableOnlineChecks,
-      environment,
-      bundleId,
-      appAppleId,
+    verifiers = new Map(
+      ENVIRONMENTS.map((env) => [
+        env,
+        new SignedDataVerifier(
+          appleRootCAs,
+          enableOnlineChecks,
+          env,
+          bundleId,
+          appAppleId,
+        ),
+      ]),
     );
-    console.log(`✅ Apple certificate verification enabled (${certPath})`);
+    console.log(
+      `✅ Apple verification enabled for ${ENVIRONMENTS.join(" → ")} (${certPath})`,
+    );
   } else {
     console.log(
       "⚠️ Apple certificates not found - running in development mode",
@@ -63,4 +81,25 @@ try {
   );
 }
 
-export { verifier, bundleId, environment };
+/**
+ * Same methods as SignedDataVerifier, but accepts data signed in either
+ * Production or Sandbox.
+ */
+const verifier = verifiers
+  ? {
+      verifyAndDecodeTransaction: (signed: string) =>
+        tryEnvironments("verifyAndDecodeTransaction", (env) =>
+          verifiers!.get(env)!.verifyAndDecodeTransaction(signed),
+        ),
+      verifyAndDecodeRenewalInfo: (signed: string) =>
+        tryEnvironments("verifyAndDecodeRenewalInfo", (env) =>
+          verifiers!.get(env)!.verifyAndDecodeRenewalInfo(signed),
+        ),
+      verifyAndDecodeNotification: (signed: string) =>
+        tryEnvironments("verifyAndDecodeNotification", (env) =>
+          verifiers!.get(env)!.verifyAndDecodeNotification(signed),
+        ),
+    }
+  : null;
+
+export { verifier, bundleId, environment, ENVIRONMENTS, tryEnvironments };

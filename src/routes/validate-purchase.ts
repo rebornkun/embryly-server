@@ -1,5 +1,10 @@
 import { Router } from "express";
-import { verifier, bundleId, environment } from "../config/apple.js";
+import {
+  verifier,
+  bundleId,
+  ENVIRONMENTS,
+  tryEnvironments,
+} from "../config/apple.js";
 import { supabase } from "../config/supabase.js";
 import {
   getPlanKeyFromProductId,
@@ -22,8 +27,11 @@ interface ValidatePurchaseRequest {
   userId: string; // Your app's user ID (should match appAccountToken)
 }
 
-// Initialize API client for validate-purchase
-let apiClient: AppStoreServerAPIClient | null = null;
+// One API client per environment (Production and Sandbox)
+let apiClients: Map<
+  (typeof ENVIRONMENTS)[number],
+  AppStoreServerAPIClient
+> | null = null;
 try {
   const issuerId = process.env.APPLE_ISSUER_ID;
   const keyId = process.env.APPLE_KEY_ID;
@@ -51,12 +59,12 @@ try {
     }
 
     if (encodedKey) {
-      apiClient = new AppStoreServerAPIClient(
-        encodedKey,
-        keyId,
-        issuerId,
-        bundleId,
-        environment,
+      const key = encodedKey;
+      apiClients = new Map(
+        ENVIRONMENTS.map((env) => [
+          env,
+          new AppStoreServerAPIClient(key, keyId, issuerId, bundleId, env),
+        ]),
       );
       console.log("✅ API Client initialized for validate-purchase");
     } else {
@@ -84,7 +92,8 @@ router.post("/validate-purchase", async (req, res) => {
     }
 
     // Prefer appReceipt + API client approach
-    if (appReceipt && apiClient) {
+    if (appReceipt && apiClients) {
+      const clients = apiClients;
       console.log("🔍 Using transaction history API for user:", userId);
 
       // Extract transaction ID from app receipt
@@ -109,11 +118,20 @@ router.post("/validate-purchase", async (req, res) => {
       };
 
       let allTransactions: string[] = [];
-      let response = await apiClient.getTransactionHistory(
-        transactionId,
-        null,
-        transactionHistoryRequest,
-        GetTransactionHistoryVersion.V2,
+      // The transaction exists in only one environment: find it there, then
+      // keep paging with that environment's client.
+      let { apiClient, response } = await tryEnvironments(
+        "getTransactionHistory",
+        async (env) => {
+          const apiClient = clients.get(env)!;
+          const response = await apiClient.getTransactionHistory(
+            transactionId,
+            null,
+            transactionHistoryRequest,
+            GetTransactionHistoryVersion.V2,
+          );
+          return { apiClient, response };
+        },
       );
 
       if (response.signedTransactions) {
