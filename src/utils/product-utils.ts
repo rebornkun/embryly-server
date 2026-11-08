@@ -14,7 +14,12 @@ const PRODUCT_MAP: Record<string, ProductConfig> = {
     planKey: "weekly",
     type: "subscription",
   },
-  // Yearly subscription with free trial
+  // Yearly subscription (main paywall, no trial)
+  embrylyproyearly: {
+    planKey: "yearly",
+    type: "subscription",
+  },
+  // Yearly subscription with a 3-day free trial (offered after the paywall)
   embrylyproyearlytrial: {
     planKey: "yearly",
     type: "subscription",
