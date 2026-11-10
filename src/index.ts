@@ -5,7 +5,7 @@ import webhookRoutes from "./routes/webhook.js";
 import healthRoutes from "./routes/health.js";
 import validatePurchaseRoutes from "./routes/validate-purchase.js";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const app = express();
 const PORT = process.env.PORT || 3000;

@@ -3,6 +3,7 @@ import { verifier } from "../config/apple.js";
 import * as handlers from "../handlers/index.js";
 import { logPendingPayment } from "../utils/payment-logger.js";
 import { classifyError } from "../utils/error-classifier.js";
+import { finishPaymentEvent, recordPaymentEvent } from "../utils/payment-events.js";
 
 const router = Router();
 
@@ -10,11 +11,11 @@ router.post("/webhook", async (req, res) => {
   let notificationType: string | null = null;
   let txInfo: any = null;
   let renewalInfo: any = null;
+  let eventId: string | null = null;
+  const signedPayload: string | undefined = req.body?.signedPayload;
 
   try {
     console.log("📱 Received App Store notification");
-
-    const { signedPayload } = req.body;
 
     if (!signedPayload) {
       console.error("❌ Missing signedPayload in webhook request");
@@ -25,8 +26,6 @@ router.post("/webhook", async (req, res) => {
       });
     }
 
-    console.log("🔍 signedPayload:", signedPayload);
-
     if (!verifier) {
       console.error("❌ Verifier not configured");
       return res.status(200).json({
@@ -35,14 +34,9 @@ router.post("/webhook", async (req, res) => {
       });
     }
 
-    // Use Apple's verifier
-    console.log("✅ Using Apple's verifier");
-    const { notificationType: decodedNotificationType, data } =
-      await verifier.verifyAndDecodeNotification(signedPayload);
-
-    notificationType = decodedNotificationType;
-    console.log("🔍 notificationType:", notificationType);
-    console.log("🔍 data:", data);
+    const notification = await verifier.verifyAndDecodeNotification(signedPayload);
+    const data: any = notification.data;
+    notificationType = notification.notificationType ?? null;
 
     // Decode transaction info (always present)
     txInfo = await verifier.verifyAndDecodeTransaction(
@@ -50,23 +44,40 @@ router.post("/webhook", async (req, res) => {
     );
 
     // For subscription notifications, decode renewal info
-    if (!data.signedRenewalInfo) {
+    if (data.signedRenewalInfo) {
+      renewalInfo = await verifier.verifyAndDecodeRenewalInfo(
+        data.signedRenewalInfo,
+      );
+    }
+
+    // Stored before processing: the full payload survives even if a handler
+    // fails, and Vercel's one-day log window doesn't matter.
+    eventId = await recordPaymentEvent({
+      signedPayload,
+      notificationUUID: notification.notificationUUID,
+      notificationType,
+      subtype: notification.subtype ?? null,
+      environment: data.environment ?? null,
+      txInfo,
+      renewalInfo,
+    });
+
+    console.log("📱 App Store notification:", {
+      type: notificationType,
+      subtype: notification.subtype ?? null,
+      productId: txInfo?.productId,
+      originalTransactionId: txInfo?.originalTransactionId,
+      userId: txInfo?.appAccountToken,
+    });
+
+    if (!renewalInfo) {
       console.warn("⚠️ No renewal info for subscription notification");
+      await finishPaymentEvent(eventId, "ignored", "Missing renewal info");
       return res.status(200).json({
         status: "error",
         message: "Missing renewal info for subscription",
       });
     }
-
-    renewalInfo = await verifier.verifyAndDecodeRenewalInfo(
-      data.signedRenewalInfo,
-    );
-
-    console.log("🔄 Processing notification:", {
-      type: notificationType,
-      txInfo,
-      renewalInfo,
-    });
 
     // Handle different notification types
     switch (notificationType) {
@@ -90,8 +101,11 @@ router.post("/webhook", async (req, res) => {
         break;
       default:
         console.log("ℹ️ Unhandled notification type:", notificationType);
+        await finishPaymentEvent(eventId, "ignored");
+        return res.status(200).json({ status: "success" });
     }
 
+    await finishPaymentEvent(eventId, "processed");
     res.status(200).json({ status: "success" });
   } catch (error: any) {
     // Classify error to determine if it's retryable
@@ -106,6 +120,12 @@ router.post("/webhook", async (req, res) => {
       isRetryable: errorClassification.isRetryable,
       category: errorClassification.category,
     });
+
+    // Verification can fail before the row exists: keep the raw payload anyway.
+    if (!eventId && signedPayload) {
+      eventId = await recordPaymentEvent({ signedPayload, notificationType, txInfo, renewalInfo });
+    }
+    await finishPaymentEvent(eventId, "failed", error?.message ?? String(error));
 
     // Always log errors for tracking (regardless of retryability)
     if (txInfo) {
